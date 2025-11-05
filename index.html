@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="no">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Torp IF – Topp 20 & søk (publisert, redaktørstyrt)</title>
+<style>
+  :root{--text:#0b1220;--muted:#566074;--line:#e7e9ef;--bg:#fff;}
+  html,body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,Segoe UI,Roboto,Arial,sans-serif}
+  .wrap{max-width:1000px;margin:28px auto;padding:0 16px}
+  h1{font-size:20px;margin:0 0 6px}
+  .muted{color:var(--muted)}
+  .pill{display:inline-flex;gap:8px;align-items:center;border:1px solid var(--line);background:#f7f8fb;border-radius:999px;padding:6px 10px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0}
+  input[type=text]{padding:10px 12px;border:1px solid var(--line);border-radius:10px;min-width:260px}
+  button{padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:#f7f8fb;cursor:pointer}
+  button.active{background:#e7f1ff;border-color:#cfe4ff}
+  table{width:100%;border-collapse:separate;border-spacing:0 6px;margin-top:10px}
+  th,td{text-align:left;padding:10px}
+  thead th{font-size:12px;color:var(--muted);font-weight:600;border-bottom:1px solid var(--line)}
+  tbody tr{background:#fafbff;border:1px solid var(--line);border-radius:12px}
+  tbody tr td:first-child{border-top-left-radius:12px;border-bottom-left-radius:12px}
+  tbody tr td:last-child{border-top-right-radius:12px;border-bottom-right-radius:12px}
+  .right{margin-left:auto}
+</style>
+
+<div class="wrap">
+  <h1>⚽ Torp IF – Arkiv 1957–2025</h1>
+  <div class="muted">Data er redaktørstyrt. Lesere kan ikke laste opp eller endre.</div>
+
+  <div class="row">
+    <input id="q" type="text" placeholder="Søk i spillernavn (søker i hele arkivet)">
+    <button id="btnTop20" class="active">Topp 20</button>
+    <button id="btnAll">Vis alle</button>
+    <button id="btnDownload" class="right">Last ned visning (CSV)</button>
+  </div>
+
+  <div class="row">
+    <span class="pill">📦 <span id="status">Laster…</span></span>
+    <span class="pill">🕒 <span id="updated">Oppdatert: sett her i koden</span></span>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Spiller</th>
+        <th>Kamper (sum)</th>
+        <th>Antall sesonger</th>
+        <th>Sesonger (år)</th>
+      </tr>
+    </thead>
+    <tbody id="tb"></tbody>
+  </table>
+</div>
+
+<script>
+/*** === 1) LIM INN CSV HER (inkl. headerlinje) ===
+   Spalter som aksepteres: Spiller, År (evt Ar/Aar), Kamper
+   Hvis du vil bruke separat fil i repoet (torp.csv), la dette feltet stå tomt.
+***/
+const DATA_CSV = `Spiller,År,Kamper
+<< LIM INN CSV HER >>
+`;
+
+// Sett manuelt når du oppdaterer data (frivillig).
+document.getElementById('updated').textContent = 'Oppdatert: ' + new Date().toLocaleDateString('no-NO');
+
+/*** === 2) Robust CSV-hjelp === */
+const $ = s => document.querySelector(s);
+
+function detectDelimiter(sampleLine){
+  const counts = {';':(sampleLine.match(/;/g)||[]).length, ',':(sampleLine.match(/,/g)||[]).length, '\t':(sampleLine.match(/\t/g)||[]).length};
+  return Object.entries(counts).sort((a,b)=>b[1]-a[1])[0][0] || ',';
+}
+function parseCSVWith(text, delim){
+  const rows=[]; let i=0, cell='', row=[], inQ=false;
+  const pushCell=()=>{row.push(cell); cell='';}, pushRow=()=>{rows.push(row); row=[];};
+  while(i<text.length){
+    const c=text[i];
+    if(inQ){
+      if(c==='"' && text[i+1]==='"'){cell+='"'; i+=2; continue;}
+      if(c==='"'){inQ=false; i++; continue;}
+      cell+=c; i++; continue;
+    }else{
+      if(c==='"'){inQ=true; i++; continue;}
+      if(c===delim){pushCell(); i++; continue;}
+      if(c==='\n'){pushCell(); pushRow(); i++; continue;}
+      if(c==='\r'){i++; continue;}
+      cell+=c; i++;
+    }
+  }
+  pushCell(); if(row.length) pushRow();
+  return rows.filter(r => r.length && r.some(v => (v||'').trim()!==''));
+}
+function normalizeHeader(h){
+  let s=(h||'').toString().trim().toLowerCase();
+  s=s.normalize('NFD').replace(/[\u0300-\u036f]/g,''); // diakritikk
+  s=s.replace(/å/g,'a').replace(/ø/g,'o').replace(/æ/g,'ae').replace(/\s+/g,'');
+  return s;
+}
+function num(x){ const s=(x==null?'':String(x)).replace(/\s/g,'').replace(/\./g,'').replace(/,/g,''); const n=Number(s); return Number.isFinite(n)?n:0; }
+function toCSV(rows){ return rows.map(r=>r.map(v=>String(v??'')).join(',')).join('\n'); }
+
+/*** === 3) Last data (innebygd først, ellers torp.csv) === */
+let rawRows = []; // rader fra CSV (array av arrays)
+let data = [];    // {Spiller, År, Kamper}
+let showAll = false; // vis alle vs topp20
+
+async function loadData(){
+  try{
+    let text = DATA_CSV.trim();
+    if(!text){
+      const res = await fetch('torp.csv', {cache:'no-store'});
+      if(!res.ok) throw new Error('Fant ikke torp.csv i samme mappe.');
+      text = await res.text();
+    }
+    const firstLine = (text.split(/\r?\n/).find(l => l.trim().length>0) || '');
+    const delim = detectDelimiter(firstLine);
+    rawRows = parseCSVWith(text, delim);
+    if(!rawRows.length) throw new Error('Tom CSV');
+
+    const hdr = rawRows[0].map(normalizeHeader);
+    const iSp = hdr.findIndex(h => h==='spiller');
+    const iYr = hdr.findIndex(h => h==='år' || h==='ar' || h==='aar' || h==='år');
+    const iKm = hdr.findIndex(h => h==='kamper');
+    if(iSp<0 || iYr<0 || iKm<0) throw new Error('Mangler kolonner Spiller + År/Ar/Aar + Kamper');
+
+    data = rawRows.slice(1).map(r=>({
+      Spiller: (r[iSp]||'').trim(),
+      År: Number(String(r[iYr]||'').trim()),
+      Kamper: num(r[iKm])
+    })).filter(r=> r.Spiller && Number.isFinite(r.År) && r.År>=1957 && r.År<=2025);
+
+    $('#status').textContent = `${data.length.toLocaleString('no-NO')} rader – klar`;
+    render();
+  }catch(err){
+    $('#status').textContent = 'Feil: ' + (err.message||err);
+  }
+}
+
+/*** === 4) Kjerne === */
+function aggregate(full=false){
+  const q = ($('#q').value||'').trim().toLowerCase();
+  const by = new Map();
+  for(const r of data){
+    if(q && !r.Spiller.toLowerCase().includes(q)) continue; // søk i HELE arkivet
+    if(!by.has(r.Spiller)) by.set(r.Spiller, {Spiller:r.Spiller, KamperSum:0, Years:new Set()});
+    const o = by.get(r.Spiller);
+    o.KamperSum += num(r.Kamper);
+    o.Years.add(r.År);
+  }
+  let arr = Array.from(by.values()).map(o=>({
+    Spiller:o.Spiller,
+    KamperSum:o.KamperSum,
+    SesongerAnt:o.Years.size,
+    SesongerListe:Array.from(o.Years).sort((a,b)=>a-b)
+  }));
+  arr.sort((a,b)=> (b.KamperSum-a.KamperSum) || (b.SesongerAnt-a.SesongerAnt) || a.Spiller.localeCompare(b.Spiller));
+  if(!full && !q) arr = arr.slice(0,20); // default: topp 20 når det IKKE er søk
+  return arr;
+}
+
+function viewAsCSV(rows){
+  const out = [['#','Spiller','Kamper (sum)','Antall sesonger','Sesonger (år)']];
+  rows.forEach((r,i)=> out.push([i+1, r.Spiller, r.KamperSum, r.SesongerAnt, r.SesongerListe.join(' ')]));
+  return out;
+}
+
+function render(){
+  const rows = aggregate(showAll || ($('#q').value||'').trim().length>0);
+  const tb = $('#tb'); tb.innerHTML='';
+  rows.forEach((r,i)=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML = `<td>${i+1}</td>
+                    <td>${r.Spiller}</td>
+                    <td>${r.KamperSum.toLocaleString('no-NO')}</td>
+                    <td>${r.SesongerAnt}</td>
+                    <td>${r.SesongerListe.join(', ')}</td>`;
+    tb.appendChild(tr);
+  });
+  $('#btnTop20').classList.toggle('active', !showAll && !($('#q').value||'').trim());
+  $('#btnAll').classList.toggle('active', showAll || (!!($('#q').value||'').trim()));
+}
+
+/*** === 5) UI === */
+$('#q').addEventListener('input', render);
+$('#btnTop20').addEventListener('click', ()=>{ showAll=false; $('#q').value=''; render(); });
+$('#btnAll').addEventListener('click', ()=>{ showAll=true; render(); });
+$('#btnDownload').addEventListener('click', ()=>{
+  const rows = aggregate(showAll || ($('#q').value||'').trim().length>0);
+  const blob = new Blob([toCSV(viewAsCSV(rows))], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url; a.download='torp_visning.csv'; a.click();
+  URL.revokeObjectURL(url);
+});
+
+loadData();
+</script>
+</html>
