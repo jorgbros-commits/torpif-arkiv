@@ -2,41 +2,34 @@
 <html lang="no">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Torp IF – Topp 20 & søk (publisert, redaktørstyrt)</title>
+<title>Torp IF – Topp 20 & søk (fast CSV)</title>
 <style>
-  :root{--text:#0b1220;--muted:#566074;--line:#e7e9ef;--bg:#fff;}
-  html,body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,Segoe UI,Roboto,Arial,sans-serif}
+  html,body{margin:0;background:#fff;color:#0b1220;font:15px/1.5 system-ui,Segoe UI,Roboto,Arial,sans-serif}
   .wrap{max-width:1000px;margin:28px auto;padding:0 16px}
-  h1{font-size:20px;margin:0 0 6px}
-  .muted{color:var(--muted)}
-  .pill{display:inline-flex;gap:8px;align-items:center;border:1px solid var(--line);background:#f7f8fb;border-radius:999px;padding:6px 10px}
+  h1{font-size:20px;margin:0 0 8px}
+  .muted{color:#566074}
   .row{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0}
-  input[type=text]{padding:10px 12px;border:1px solid var(--line);border-radius:10px;min-width:260px}
-  button{padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:#f7f8fb;cursor:pointer}
-  button.active{background:#e7f1ff;border-color:#cfe4ff}
+  input[type=text]{padding:10px 12px;border:1px solid #e7e9ef;border-radius:10px;min-width:260px}
+  button{padding:10px 12px;border-radius:10px;border:1px solid #e7e9ef;background:#f7f8fb;cursor:pointer}
   table{width:100%;border-collapse:separate;border-spacing:0 6px;margin-top:10px}
   th,td{text-align:left;padding:10px}
-  thead th{font-size:12px;color:var(--muted);font-weight:600;border-bottom:1px solid var(--line)}
-  tbody tr{background:#fafbff;border:1px solid var(--line);border-radius:12px}
+  thead th{font-size:12px;color:#566074;font-weight:600;border-bottom:1px solid #e7e9ef}
+  tbody tr{background:#fafbff;border:1px solid #e7e9ef;border-radius:12px}
   tbody tr td:first-child{border-top-left-radius:12px;border-bottom-left-radius:12px}
   tbody tr td:last-child{border-top-right-radius:12px;border-bottom-right-radius:12px}
-  .right{margin-left:auto}
+  .pill{display:inline-flex;gap:8px;align-items:center;border:1px solid #e7e9ef;background:#f7f8fb;border-radius:999px;padding:6px 10px}
 </style>
 
 <div class="wrap">
   <h1>⚽ Torp IF – Arkiv 1957–2025</h1>
-  <div class="muted">Data er redaktørstyrt. Lesere kan ikke laste opp eller endre.</div>
+  <div class="muted">Data lastes fra <code>torp_sesonger_clean.csv</code> i samme mappe. Lesere kan ikke laste opp.</div>
 
   <div class="row">
     <input id="q" type="text" placeholder="Søk i spillernavn (søker i hele arkivet)">
-    <button id="btnTop20" class="active">Topp 20</button>
+    <button id="btnTop20">Topp 20</button>
     <button id="btnAll">Vis alle</button>
-    <button id="btnDownload" class="right">Last ned visning (CSV)</button>
-  </div>
-
-  <div class="row">
-    <span class="pill">📦 <span id="status">Laster…</span></span>
-    <span class="pill">🕒 <span id="updated">Oppdatert: sett her i koden</span></span>
+    <button id="btnDownload">Last ned visning (CSV)</button>
+    <span id="status" class="pill">Laster…</span>
   </div>
 
   <table>
@@ -54,16 +47,8 @@
 </div>
 
 <script>
-/*** === 1) LIM INN CSV HER (inkl. headerlinje) ===
-   Spalter som aksepteres: Spiller, År (evt Ar/Aar), Kamper
-   Hvis du vil bruke separat fil i repoet (torp.csv), la dette feltet stå tomt.
-***/
-const DATA_CSV = ;
+const CSV_FILENAME = 'torp_sesonger_clean.csv'; // <-- NAVN PÅ FILEN
 
-// Sett manuelt når du oppdaterer data (frivillig).
-document.getElementById('updated').textContent = 'Oppdatert: ' + new Date().toLocaleDateString('no-NO');
-
-/*** === 2) Robust CSV-hjelp === */
 const $ = s => document.querySelector(s);
 
 function detectDelimiter(sampleLine){
@@ -88,42 +73,39 @@ function parseCSVWith(text, delim){
     }
   }
   pushCell(); if(row.length) pushRow();
-  return rows.filter(r => r.length && r.some(v => (v||'').trim()!==''));
+  return rows.filter(r=>r.length && r.some(v=>(v||'').trim()!==''));
 }
 function normalizeHeader(h){
   let s=(h||'').toString().trim().toLowerCase();
-  s=s.normalize('NFD').replace(/[\u0300-\u036f]/g,''); // diakritikk
+  s=s.normalize('NFD').replace(/[\u0300-\u036f]/g,'');
   s=s.replace(/å/g,'a').replace(/ø/g,'o').replace(/æ/g,'ae').replace(/\s+/g,'');
   return s;
 }
 function num(x){ const s=(x==null?'':String(x)).replace(/\s/g,'').replace(/\./g,'').replace(/,/g,''); const n=Number(s); return Number.isFinite(n)?n:0; }
 function toCSV(rows){ return rows.map(r=>r.map(v=>String(v??'')).join(',')).join('\n'); }
 
-/*** === 3) Last data (innebygd først, ellers torp.csv) === */
-let rawRows = []; // rader fra CSV (array av arrays)
-let data = [];    // {Spiller, År, Kamper}
-let showAll = false; // vis alle vs topp20
+let data=[];    // {Spiller, År, Kamper}
+let showAll=false;
 
-async function loadData(){
+async function loadCSV(){
   try{
-    let text = DATA_CSV.trim();
-    if(!text){
-      const res = await fetch('torp.csv', {cache:'no-store'});
-      if(!res.ok) throw new Error('Fant ikke torp.csv i samme mappe.');
-      text = await res.text();
-    }
+    // cache-bust så du slipper “gammel” versjon
+    const res = await fetch(CSV_FILENAME + '?v=' + Date.now(), {cache:'no-store'});
+    if(!res.ok) throw new Error('Fant ikke ' + CSV_FILENAME + ' i samme mappe.');
+    const text = await res.text();
+
     const firstLine = (text.split(/\r?\n/).find(l => l.trim().length>0) || '');
     const delim = detectDelimiter(firstLine);
-    rawRows = parseCSVWith(text, delim);
-    if(!rawRows.length) throw new Error('Tom CSV');
+    const rows = parseCSVWith(text, delim);
+    if(!rows.length) throw new Error('Tom CSV');
 
-    const hdr = rawRows[0].map(normalizeHeader);
+    const hdr = rows[0].map(normalizeHeader);
     const iSp = hdr.findIndex(h => h==='spiller');
     const iYr = hdr.findIndex(h => h==='år' || h==='ar' || h==='aar' || h==='år');
     const iKm = hdr.findIndex(h => h==='kamper');
-    if(iSp<0 || iYr<0 || iKm<0) throw new Error('Mangler kolonner Spiller + År/Ar/Aar + Kamper');
+    if(iSp<0 || iYr<0 || iKm<0) throw new Error('Mangler kolonner (Spiller + År/Ar/Aar + Kamper)');
 
-    data = rawRows.slice(1).map(r=>({
+    data = rows.slice(1).map(r=>({
       Spiller: (r[iSp]||'').trim(),
       År: Number(String(r[iYr]||'').trim()),
       Kamper: num(r[iKm])
@@ -136,13 +118,12 @@ async function loadData(){
   }
 }
 
-/*** === 4) Kjerne === */
 function aggregate(full=false){
   const q = ($('#q').value||'').trim().toLowerCase();
   const by = new Map();
   for(const r of data){
-    if(q && !r.Spiller.toLowerCase().includes(q)) continue; // søk i HELE arkivet
-    if(!by.has(r.Spiller)) by.set(r.Spiller, {Spiller:r.Spiller, KamperSum:0, Years:new Set()});
+    if(q && !r.Spiller.toLowerCase().includes(q)) continue; // søk i hele arkivet
+    if(!by.has(r.Spiller)) by.set(r.Spiller,{Spiller:r.Spiller, KamperSum:0, Years:new Set()});
     const o = by.get(r.Spiller);
     o.KamperSum += num(r.Kamper);
     o.Years.add(r.År);
@@ -154,7 +135,7 @@ function aggregate(full=false){
     SesongerListe:Array.from(o.Years).sort((a,b)=>a-b)
   }));
   arr.sort((a,b)=> (b.KamperSum-a.KamperSum) || (b.SesongerAnt-a.SesongerAnt) || a.Spiller.localeCompare(b.Spiller));
-  if(!full && !q) arr = arr.slice(0,20); // default: topp 20 når det IKKE er søk
+  if(!full && !($('#q').value||'').trim()) arr = arr.slice(0,20); // topp 20 default
   return arr;
 }
 
@@ -168,7 +149,7 @@ function render(){
   const rows = aggregate(showAll || ($('#q').value||'').trim().length>0);
   const tb = $('#tb'); tb.innerHTML='';
   rows.forEach((r,i)=>{
-    const tr=document.createElement('tr');
+    const tr = document.createElement('tr');
     tr.innerHTML = `<td>${i+1}</td>
                     <td>${r.Spiller}</td>
                     <td>${r.KamperSum.toLocaleString('no-NO')}</td>
@@ -176,11 +157,8 @@ function render(){
                     <td>${r.SesongerListe.join(', ')}</td>`;
     tb.appendChild(tr);
   });
-  $('#btnTop20').classList.toggle('active', !showAll && !($('#q').value||'').trim());
-  $('#btnAll').classList.toggle('active', showAll || (!!($('#q').value||'').trim()));
 }
 
-/*** === 5) UI === */
 $('#q').addEventListener('input', render);
 $('#btnTop20').addEventListener('click', ()=>{ showAll=false; $('#q').value=''; render(); });
 $('#btnAll').addEventListener('click', ()=>{ showAll=true; render(); });
@@ -192,7 +170,6 @@ $('#btnDownload').addEventListener('click', ()=>{
   URL.revokeObjectURL(url);
 });
 
-loadData();
+loadCSV();
 </script>
 </html>
-
