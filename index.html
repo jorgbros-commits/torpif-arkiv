@@ -1,4 +1,52 @@
-// --- Navn-aliaser (konkrete unntak) ---
+<!doctype html>
+<html lang="no">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Torp IF – Arkiv 1957–2025</title>
+<style>
+  html,body{margin:0;background:#fff;color:#0b1220;font:15px/1.5 system-ui,Segoe UI,Roboto,Arial,sans-serif}
+  .wrap{max-width:1000px;margin:28px auto;padding:0 16px}
+  h1{font-size:22px;margin:0 0 8px}
+  .muted{color:#566074}
+  .row{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0}
+  input[type=text]{padding:10px 12px;border:1px solid #e7e9ef;border-radius:10px;min-width:260px}
+  button{padding:10px 12px;border-radius:10px;border:1px solid #e7e9ef;background:#f7f8fb;cursor:pointer}
+  table{width:100%;border-collapse:separate;border-spacing:0 6px;margin-top:10px}
+  th,td{text-align:left;padding:10px}
+  thead th{font-size:12px;color:#566074;font-weight:600;border-bottom:1px solid #e7e9ef}
+  tbody tr{background:#fafbff;border:1px solid #e7e9ef;border-radius:12px}
+  tbody tr td:first-child{border-top-left-radius:12px;border-bottom-left-radius:12px}
+  tbody tr td:last-child{border-top-right-radius:12px;border-bottom-right-radius:12px}
+  .pill{display:inline-flex;gap:8px;align-items:center;border:1px solid #e7e9ef;background:#f7f8fb;border-radius:999px;padding:6px 10px}
+</style>
+
+<div class="wrap">
+  <h1>⚽ Torp IF – Arkiv 1957–2025</h1>
+  <div class="muted">Data lastes fra <code>torp_sesonger_clean.csv</code> i samme mappe. Lesere kan ikke laste opp.</div>
+
+  <div class="row">
+    <input id="q" type="text" placeholder="Søk i spillernavn (søker i hele arkivet)">
+    <button id="btnTop20">Topp 20</button>
+    <button id="btnAll">Vis alle</button>
+    <button id="btnDownload">Last ned visning (CSV)</button>
+    <span id="status" class="pill">Laster…</span>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>#</th><th>Spiller</th><th>Kamper (sum)</th><th>Antall sesonger</th><th>Sesonger (år)</th>
+      </tr>
+    </thead>
+    <tbody id="tb"></tbody>
+  </table>
+</div>
+
+<script>
+const CSV_FILENAME = 'torp_sesonger_clean.csv';  // må ligge i repo-roten
+const $ = s => document.querySelector(s);
+
+// --- Alias (konkrete unntak) ---
 const NAME_ALIASES = {
   "andreas brynjeng sandvik": "Andreas Sandvik",
   "carl viktor mikael tillberg": "Viktor Tillberg",
@@ -8,45 +56,155 @@ const NAME_ALIASES = {
   "jon morten skåksrud": "Jon Morten Skåksrud",
   "geir kalrsen": "Geir Karlsen",
   "geir karslen": "Geir Karlsen"
-  // legg gjerne flere etter behov
 };
 
-// --- Lett normalisering uten biblioteker ---
+// --- Navn-normalisering (forsiktig) ---
 function canonicalizeName(raw){
   if(!raw) return "";
-
-  // 1) Normalize/trim
   let s = String(raw)
-    .normalize("NFD").replace(/[\u0300-\u036f]/g,"")  // fjerner aksenter (å->a, ø->o, æ->ae)
-    .replace(/\s+/g," ")                               // flere spaces -> ett
-    .trim();
+    .normalize("NFD").replace(/[\u0300-\u036f]/g,"") // fjern diakritikk
+    .replace(/\s+/g," ").trim();
 
-  // 2) Alias (full match) – tar de kjente duplikatene først
-  const aliasHit = NAME_ALIASES[s.toLowerCase()];
-  if (aliasHit) return toTitleCase(aliasHit);
+  // Eksakte alias først
+  const hit = NAME_ALIASES[s.toLowerCase()];
+  if (hit) return toTitleCase(hit);
 
-  // 3) Del i ord og fjern mellomnavn (behold første + siste)
+  // Behold første + siste; normaliser vanlige varianter
   const parts = s.split(" ").filter(Boolean);
   if (parts.length >= 2) {
     let first = parts[0];
     let last  = parts[parts.length - 1];
 
-    // 4) Standardiser fornavn: Victor -> Viktor
+    // Victor -> Viktor
     if (/^victor$/i.test(first)) first = "Viktor";
 
-    // 5) Rydd opp i etternavn: Til(l)berg-varianter -> Tillberg
-    const lastPlain = last.toLowerCase().replace(/[^a-z]/g,"");
-    if (/^ti+l+ber?g$/.test(lastPlain)) {
-      last = "Tillberg";
-    }
+    // Til(l)berg-varianter -> Tillberg
+    const lp = last.toLowerCase().replace(/[^a-z]/g,"");
+    if (/^ti+l+ber?g$/.test(lp)) last = "Tillberg";
 
     return toTitleCase(`${first} ${last}`);
   }
-
-  // Fallback: tittel-case på enkeltord
   return toTitleCase(s);
 }
 
 function toTitleCase(name){
   return name.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
 }
+
+// --- CSV verktøy ---
+function detectDelimiter(line){
+  const c={';':(line.match(/;/g)||[]).length,',':(line.match(/,/g)||[]).length,'\t':(line.match(/\t/g)||[]).length};
+  return Object.entries(c).sort((a,b)=>b[1]-a[1])[0][0]||',';
+}
+function parseCSVWith(text,delim){
+  const rows=[];let i=0,cell='',row=[],inQ=false;
+  const pc=()=>{row.push(cell);cell='';},pr=()=>{rows.push(row);row=[];};
+  while(i<text.length){
+    const c=text[i];
+    if(inQ){
+      if(c=='"'&&text[i+1]=='"'){cell+='"';i+=2;continue;}
+      if(c=='"'){inQ=false;i++;continue;}
+      cell+=c;i++;continue;
+    }
+    if(c=='"'){inQ=true;i++;continue;}
+    if(c===delim){pc();i++;continue;}
+    if(c=='\n'){pc();pr();i++;continue;}
+    if(c=='\r'){i++;continue;}
+    cell+=c;i++;
+  }
+  pc();if(row.length)pr();
+  return rows.filter(r=>r.length&&r.some(v=>(v||'').trim()!==''));
+}
+function normalizeHeader(h){
+  let s=(h||'').toString().trim().toLowerCase();
+  s=s.normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  s=s.replace(/å/g,'a').replace(/ø/g,'o').replace(/æ/g,'ae').replace(/\s+/g,'');
+  return s;
+}
+function num(x){const s=(x==null?'':String(x)).replace(/\s/g,'').replace(/\./g,'').replace(/,/g,'');const n=Number(s);return Number.isFinite(n)?n:0;}
+function toCSV(rows){return rows.map(r=>r.map(v=>String(v??'')).join(',')).join('\n');}
+
+// --- App ---
+let data=[],showAll=false;
+
+async function loadCSV(){
+  try{
+    const res=await fetch(CSV_FILENAME+'?v='+Date.now(),{cache:'no-store'});
+    if(!res.ok) throw new Error('Fant ikke '+CSV_FILENAME+' i samme mappe.');
+    const text=await res.text();
+    const lines=text.split(/\r?\n/);
+    const firstLine = (lines.find(l=>l.trim().length>0)||',');
+    const delim=detectDelimiter(firstLine);
+    const rows=parseCSVWith(text,delim);
+    if(!rows.length) throw new Error('Tom CSV');
+
+    const hdr=rows[0].map(normalizeHeader);
+    const iSp=hdr.findIndex(h=>h==='spiller');
+    const iYr=hdr.findIndex(h=>h==='år'||h==='ar'||h==='aar'||h==='år');
+    const iKm=hdr.findIndex(h=>h==='kamper');
+    if(iSp<0||iYr<0||iKm<0) throw new Error('Mangler kolonner: Spiller + År/Ar/Aar + Kamper');
+
+    data=rows.slice(1).map(r=>({
+      Spiller: canonicalizeName(r[iSp]||''),
+      År: Number(String(r[iYr]||'').trim()),
+      Kamper: num(r[iKm])
+    })).filter(r=>r.Spiller && Number.isFinite(r.År) && r.År>=1957 && r.År<=2025);
+
+    $('#status').textContent=`${data.length.toLocaleString('no-NO')} rader – klar`;
+    render();
+  }catch(e){
+    $('#status').textContent='Feil: '+(e.message||e);
+  }
+}
+
+function aggregate(full=false){
+  const q=($('#q').value||'').trim().toLowerCase();
+  const by=new Map();
+  for(const r of data){
+    if(q && !r.Spiller.toLowerCase().includes(q)) continue;
+    if(!by.has(r.Spiller)) by.set(r.Spiller,{Spiller:r.Spiller,KamperSum:0,Years:new Set()});
+    const o=by.get(r.Spiller);
+    o.KamperSum+=num(r.Kamper);
+    o.Years.add(r.År);
+  }
+  let arr=Array.from(by.values()).map(o=>({
+    Spiller:o.Spiller,
+    KamperSum:o.KamperSum,
+    SesongerAnt:o.Years.size,
+    SesongerListe:Array.from(o.Years).sort((a,b)=>a-b)
+  }));
+  arr.sort((a,b)=>(b.KamperSum-a.KamperSum)||(b.SesongerAnt-a.SesongerAnt)||a.Spiller.localeCompare(b.Spiller));
+  if(!full && !($('#q').value||'').trim()) arr=arr.slice(0,20);
+  return arr;
+}
+
+function viewAsCSV(rows){
+  const out=[['#','Spiller','Kamper (sum)','Antall sesonger','Sesonger (år)']];
+  rows.forEach((r,i)=>out.push([i+1,r.Spiller,r.KamperSum,r.SesongerAnt,r.SesongerListe.join(' ')]));
+  return out;
+}
+
+function render(){
+  const rows=aggregate(showAll || ($('#q').value||'').trim().length>0);
+  const tb=$('#tb'); tb.innerHTML='';
+  rows.forEach((r,i)=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${i+1}</td><td>${r.Spiller}</td><td>${r.KamperSum.toLocaleString('no-NO')}</td><td>${r.SesongerAnt}</td><td>${r.SesongerListe.join(', ')}</td>`;
+    tb.appendChild(tr);
+  });
+}
+
+$('#q').addEventListener('input',render);
+$('#btnTop20').addEventListener('click',()=>{showAll=false;$('#q').value='';render();});
+$('#btnAll').addEventListener('click',()=>{showAll=true;render();});
+$('#btnDownload').addEventListener('click',()=>{
+  const rows=aggregate(showAll || ($('#q').value||'').trim().length>0);
+  const blob=new Blob([toCSV(viewAsCSV(rows))],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');a.href=url;a.download='torp_visning.csv';a.click();
+  URL.revokeObjectURL(url);
+});
+
+loadCSV();
+</script>
+</html>
