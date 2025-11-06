@@ -2,11 +2,11 @@
 <html lang="no">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Torp IF – Topp 20 & søk (fast CSV)</title>
+<title>Torp IF – Arkiv (med navnretting)</title>
 <style>
   html,body{margin:0;background:#fff;color:#0b1220;font:15px/1.5 system-ui,Segoe UI,Roboto,Arial,sans-serif}
   .wrap{max-width:1000px;margin:28px auto;padding:0 16px}
-  h1{font-size:20px;margin:0 0 8px}
+  h1{font-size:22px;margin:0 0 8px}
   .muted{color:#566074}
   .row{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0}
   input[type=text]{padding:10px 12px;border:1px solid #e7e9ef;border-radius:10px;min-width:260px}
@@ -35,11 +35,7 @@
   <table>
     <thead>
       <tr>
-        <th>#</th>
-        <th>Spiller</th>
-        <th>Kamper (sum)</th>
-        <th>Antall sesonger</th>
-        <th>Sesonger (år)</th>
+        <th>#</th><th>Spiller</th><th>Kamper (sum)</th><th>Antall sesonger</th><th>Sesonger (år)</th>
       </tr>
     </thead>
     <tbody id="tb"></tbody>
@@ -47,129 +43,10 @@
 </div>
 
 <script>
-const CSV_FILENAME = 'torp_sesonger_clean.csv'; // <-- NAVN PÅ FILEN
-
+const CSV_FILENAME = 'torp_sesonger_clean.csv';  // filnavn på databasen
 const $ = s => document.querySelector(s);
 
-function detectDelimiter(sampleLine){
-  const counts = {';':(sampleLine.match(/;/g)||[]).length, ',':(sampleLine.match(/,/g)||[]).length, '\t':(sampleLine.match(/\t/g)||[]).length};
-  return Object.entries(counts).sort((a,b)=>b[1]-a[1])[0][0] || ',';
-}
-function parseCSVWith(text, delim){
-  const rows=[]; let i=0, cell='', row=[], inQ=false;
-  const pushCell=()=>{row.push(cell); cell='';}, pushRow=()=>{rows.push(row); row=[];};
-  while(i<text.length){
-    const c=text[i];
-    if(inQ){
-      if(c==='"' && text[i+1]==='"'){cell+='"'; i+=2; continue;}
-      if(c==='"'){inQ=false; i++; continue;}
-      cell+=c; i++; continue;
-    }else{
-      if(c==='"'){inQ=true; i++; continue;}
-      if(c===delim){pushCell(); i++; continue;}
-      if(c==='\n'){pushCell(); pushRow(); i++; continue;}
-      if(c==='\r'){i++; continue;}
-      cell+=c; i++;
-    }
-  }
-  pushCell(); if(row.length) pushRow();
-  return rows.filter(r=>r.length && r.some(v=>(v||'').trim()!==''));
-}
-function normalizeHeader(h){
-  let s=(h||'').toString().trim().toLowerCase();
-  s=s.normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-  s=s.replace(/å/g,'a').replace(/ø/g,'o').replace(/æ/g,'ae').replace(/\s+/g,'');
-  return s;
-}
-function num(x){ const s=(x==null?'':String(x)).replace(/\s/g,'').replace(/\./g,'').replace(/,/g,''); const n=Number(s); return Number.isFinite(n)?n:0; }
-function toCSV(rows){ return rows.map(r=>r.map(v=>String(v??'')).join(',')).join('\n'); }
-
-let data=[];    // {Spiller, År, Kamper}
-let showAll=false;
-
-async function loadCSV(){
-  try{
-    // cache-bust så du slipper “gammel” versjon
-    const res = await fetch(CSV_FILENAME + '?v=' + Date.now(), {cache:'no-store'});
-    if(!res.ok) throw new Error('Fant ikke ' + CSV_FILENAME + ' i samme mappe.');
-    const text = await res.text();
-
-    const firstLine = (text.split(/\r?\n/).find(l => l.trim().length>0) || '');
-    const delim = detectDelimiter(firstLine);
-    const rows = parseCSVWith(text, delim);
-    if(!rows.length) throw new Error('Tom CSV');
-
-    const hdr = rows[0].map(normalizeHeader);
-    const iSp = hdr.findIndex(h => h==='spiller');
-    const iYr = hdr.findIndex(h => h==='år' || h==='ar' || h==='aar' || h==='år');
-    const iKm = hdr.findIndex(h => h==='kamper');
-    if(iSp<0 || iYr<0 || iKm<0) throw new Error('Mangler kolonner (Spiller + År/Ar/Aar + Kamper)');
-
-    data = rows.slice(1).map(r=>({
-      Spiller: (r[iSp]||'').trim(),
-      År: Number(String(r[iYr]||'').trim()),
-      Kamper: num(r[iKm])
-    })).filter(r=> r.Spiller && Number.isFinite(r.År) && r.År>=1957 && r.År<=2025);
-
-    $('#status').textContent = `${data.length.toLocaleString('no-NO')} rader – klar`;
-    render();
-  }catch(err){
-    $('#status').textContent = 'Feil: ' + (err.message||err);
-  }
-}
-
-function aggregate(full=false){
-  const q = ($('#q').value||'').trim().toLowerCase();
-  const by = new Map();
-  for(const r of data){
-    if(q && !r.Spiller.toLowerCase().includes(q)) continue; // søk i hele arkivet
-    if(!by.has(r.Spiller)) by.set(r.Spiller,{Spiller:r.Spiller, KamperSum:0, Years:new Set()});
-    const o = by.get(r.Spiller);
-    o.KamperSum += num(r.Kamper);
-    o.Years.add(r.År);
-  }
-  let arr = Array.from(by.values()).map(o=>({
-    Spiller:o.Spiller,
-    KamperSum:o.KamperSum,
-    SesongerAnt:o.Years.size,
-    SesongerListe:Array.from(o.Years).sort((a,b)=>a-b)
-  }));
-  arr.sort((a,b)=> (b.KamperSum-a.KamperSum) || (b.SesongerAnt-a.SesongerAnt) || a.Spiller.localeCompare(b.Spiller));
-  if(!full && !($('#q').value||'').trim()) arr = arr.slice(0,20); // topp 20 default
-  return arr;
-}
-
-function viewAsCSV(rows){
-  const out = [['#','Spiller','Kamper (sum)','Antall sesonger','Sesonger (år)']];
-  rows.forEach((r,i)=> out.push([i+1, r.Spiller, r.KamperSum, r.SesongerAnt, r.SesongerListe.join(' ')]));
-  return out;
-}
-
-function render(){
-  const rows = aggregate(showAll || ($('#q').value||'').trim().length>0);
-  const tb = $('#tb'); tb.innerHTML='';
-  rows.forEach((r,i)=>{
-    const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${i+1}</td>
-                    <td>${r.Spiller}</td>
-                    <td>${r.KamperSum.toLocaleString('no-NO')}</td>
-                    <td>${r.SesongerAnt}</td>
-                    <td>${r.SesongerListe.join(', ')}</td>`;
-    tb.appendChild(tr);
-  });
-}
-
-$('#q').addEventListener('input', render);
-$('#btnTop20').addEventListener('click', ()=>{ showAll=false; $('#q').value=''; render(); });
-$('#btnAll').addEventListener('click', ()=>{ showAll=true; render(); });
-$('#btnDownload').addEventListener('click', ()=>{
-  const rows = aggregate(showAll || ($('#q').value||'').trim().length>0);
-  const blob = new Blob([toCSV(viewAsCSV(rows))], {type:'text/csv;charset=utf-8;'});
-  const url = URL.createObjectURL(blob);
-  const a=document.createElement('a'); a.href=url; a.download='torp_visning.csv'; a.click();
-  URL.revokeObjectURL(url);
-});
-// --- Standardisering av spillernavn ---
+// --- Navn-aliaser for retting / sammenslåing ---
 const NAME_ALIASES = {
   "andreas brynjeng sandvik": "Andreas Sandvik",
   "carl viktor tilberg": "Viktor Tillberg",
@@ -185,11 +62,114 @@ function canonicalizeName(raw){
   s = s.replace(/\s+/g," ").trim();                            // ekstra mellomrom
   const lookup = s.toLowerCase();
   const mapped = NAME_ALIASES[lookup] || s;
-  // Title-case
   return mapped.replace(/\w\S*/g, t => t.charAt(0).toUpperCase() + t.slice(1).toLowerCase());
 }
+
+// --- CSV-hjelpere ---
+function detectDelimiter(line){
+  const c={';':(line.match(/;/g)||[]).length,',':(line.match(/,/g)||[]).length,'\t':(line.match(/\t/g)||[]).length};
+  return Object.entries(c).sort((a,b)=>b[1]-a[1])[0][0]||',';
+}
+function parseCSVWith(text,delim){
+  const rows=[];let i=0,cell='',row=[],inQ=false;
+  const pc=()=>{row.push(cell);cell='';},pr=()=>{rows.push(row);row=[];};
+  while(i<text.length){
+    const c=text[i];
+    if(inQ){
+      if(c=='"'&&text[i+1]=='"'){cell+='"';i+=2;continue;}
+      if(c=='"'){inQ=false;i++;continue;}
+      cell+=c;i++;continue;
+    }
+    if(c=='"'){inQ=true;i++;continue;}
+    if(c===delim){pc();i++;continue;}
+    if(c=='\n'){pc();pr();i++;continue;}
+    if(c=='\r'){i++;continue;}
+    cell+=c;i++;
+  }
+  pc();if(row.length)pr();
+  return rows.filter(r=>r.length&&r.some(v=>(v||'').trim()!==''));
+}
+function normalizeHeader(h){
+  let s=(h||'').toString().trim().toLowerCase();
+  s=s.normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  s=s.replace(/å/g,'a').replace(/ø/g,'o').replace(/æ/g,'ae').replace(/\s+/g,'');
+  return s;
+}
+function num(x){const s=(x==null?'':String(x)).replace(/\s/g,'').replace(/\./g,'').replace(/,/g,'');const n=Number(s);return Number.isFinite(n)?n:0;}
+function toCSV(rows){return rows.map(r=>r.map(v=>String(v??'')).join(',')).join('\n');}
+
+let data=[],showAll=false;
+
+async function loadCSV(){
+  try{
+    const res=await fetch(CSV_FILENAME+'?v='+Date.now(),{cache:'no-store'});
+    if(!res.ok)throw new Error('Fant ikke '+CSV_FILENAME);
+    const text=await res.text();
+    const delim=detectDelimiter(text.split(/\r?\n/)[0]||',');
+    const rows=parseCSVWith(text,delim);
+    const hdr=rows[0].map(normalizeHeader);
+    const iSp=hdr.findIndex(h=>h==='spiller');
+    const iYr=hdr.findIndex(h=>h==='år'||h==='ar'||h==='aar'||h==='år');
+    const iKm=hdr.findIndex(h=>h==='kamper');
+    if(iSp<0||iYr<0||iKm<0)throw new Error('Mangler kolonner Spiller/År/Kamper');
+    data=rows.slice(1).map(r=>({
+      Spiller: canonicalizeName(r[iSp]||''),
+      År:Number(String(r[iYr]||'').trim()),
+      Kamper:num(r[iKm])
+    })).filter(r=>r.Spiller&&Number.isFinite(r.År));
+    $('#status').textContent=`${data.length.toLocaleString('no-NO')} rader – klar`;
+    render();
+  }catch(e){$('#status').textContent='Feil: '+(e.message||e);}
+}
+
+function aggregate(full=false){
+  const q=($('#q').value||'').trim().toLowerCase();
+  const by=new Map();
+  for(const r of data){
+    if(q&&!r.Spiller.toLowerCase().includes(q))continue;
+    if(!by.has(r.Spiller))by.set(r.Spiller,{Spiller:r.Spiller,KamperSum:0,Years:new Set()});
+    const o=by.get(r.Spiller);
+    o.KamperSum+=num(r.Kamper);
+    o.Years.add(r.År);
+  }
+  let arr=Array.from(by.values()).map(o=>({
+    Spiller:o.Spiller,
+    KamperSum:o.KamperSum,
+    SesongerAnt:o.Years.size,
+    SesongerListe:Array.from(o.Years).sort((a,b)=>a-b)
+  }));
+  arr.sort((a,b)=>(b.KamperSum-a.KamperSum)||(b.SesongerAnt-a.SesongerAnt)||a.Spiller.localeCompare(b.Spiller));
+  if(!full&&!($('#q').value||'').trim())arr=arr.slice(0,20);
+  return arr;
+}
+
+function viewAsCSV(rows){
+  const out=[['#','Spiller','Kamper (sum)','Antall sesonger','Sesonger (år)']];
+  rows.forEach((r,i)=>out.push([i+1,r.Spiller,r.KamperSum,r.SesongerAnt,r.SesongerListe.join(' ')]));
+  return out;
+}
+
+function render(){
+  const rows=aggregate(showAll||($('#q').value||'').trim().length>0);
+  const tb=$('#tb');tb.innerHTML='';
+  rows.forEach((r,i)=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${i+1}</td><td>${r.Spiller}</td><td>${r.KamperSum.toLocaleString('no-NO')}</td><td>${r.SesongerAnt}</td><td>${r.SesongerListe.join(', ')}</td>`;
+    tb.appendChild(tr);
+  });
+}
+
+$('#q').addEventListener('input',render);
+$('#btnTop20').addEventListener('click',()=>{showAll=false;$('#q').value='';render();});
+$('#btnAll').addEventListener('click',()=>{showAll=true;render();});
+$('#btnDownload').addEventListener('click',()=>{
+  const rows=aggregate(showAll||($('#q').value||'').trim().length>0);
+  const blob=new Blob([toCSV(viewAsCSV(rows))],{type:'text/csv;charset=utf-8;'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');a.href=url;a.download='torp_visning.csv';a.click();
+  URL.revokeObjectURL(url);
+});
 
 loadCSV();
 </script>
 </html>
-
