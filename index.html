@@ -169,7 +169,27 @@ $('#btnDownload').addEventListener('click', ()=>{
   const a=document.createElement('a'); a.href=url; a.download='torp_visning.csv'; a.click();
   URL.revokeObjectURL(url);
 });
+// --- Standardisering av spillernavn ---
+const NAME_ALIASES = {
+  "andreas brynjeng sandvik": "Andreas Sandvik",
+  "carl viktor tilberg": "Viktor Tillberg",
+  "jon morten skogsrud": "Jon Morten Skåksrud",
+  "jon morten skåksrud": "Jon Morten Skåksrud",
+  "geir kalrsen": "Geir Karlsen",
+  "geir karslen": "Geir Karlsen"
+};
+
+function canonicalizeName(raw){
+  if(!raw) return "";
+  let s = raw.normalize("NFD").replace(/[\u0300-\u036f]/g,""); // fjern aksenter
+  s = s.replace(/\s+/g," ").trim();                            // ekstra mellomrom
+  const lookup = s.toLowerCase();
+  const mapped = NAME_ALIASES[lookup] || s;
+  // Title-case
+  return mapped.replace(/\w\S*/g, t => t.charAt(0).toUpperCase() + t.slice(1).toLowerCase());
+}
 
 loadCSV();
 </script>
 </html>
+
